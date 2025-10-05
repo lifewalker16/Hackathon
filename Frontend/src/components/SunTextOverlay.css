@@ -1,0 +1,22 @@
+@font-face {
+  font-family: 'BitcountPropSingleInk';
+  src: url('/fonts/BitcountPropSingleInk.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+}
+.sun-text-overlay {
+  position: relative;
+  max-width: 500px;
+  padding: 1rem;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.4);
+  box-shadow: 0 0 15px rgba(255, 200, 100, 0.5);
+
+  font-family: 'BitcountPropSingleInk', sans-serif;
+  font-size: 1.6rem;
+  line-height: 1.6rem;
+  color: #FFD580;
+  text-align: left;
+
+  z-index: 10;
+}
