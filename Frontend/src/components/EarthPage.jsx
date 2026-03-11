@@ -1,401 +1,429 @@
-import { useState, useRef, Suspense, useEffect, useMemo } from "react";
-import { Canvas, useThree, useFrame } from "@react-three/fiber";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Environment, OrbitControls } from "@react-three/drei";
 import { EffectComposer, Vignette, Bloom } from "@react-three/postprocessing";
-import * as THREE from 'three';
+import * as THREE from "three";
 
-import Earth from "./Earth";
-import MilkyWay from "./Milkyway";
-import TextType from "./TextType";
-import ExploreButton from "./EarthButton"; // Assuming this is your button component
+import Earth from "./scene/shared/Earth";
+import Milkyway from "./scene/backgrounds/Milkyway";
 
-// --- CONFIGURATION CONSTANTS (Adjusted for smoother timing) ---
+const STAGES = {
+  INITIAL: "initial",
+  ZOOM_IN: "zoom-in",
+  ALIGN_RIGHT: "align-right",
+  VIDEO: "video",
+};
+
 const INITIAL_ZOOM_DURATION = 9000;
-// NEW: Total duration for the side-alignment phase (longer hold for the final text)
 const ALIGNMENT_DURATION = 5000;
-const ALIGNMENT_HOLD_TIME = 3000; 
+const ALIGNMENT_HOLD_TIME = 3000;
 const TYPING_START = 1500;
-// -------------------------------------------------------------------
+const FINAL_TEXT_DELAY = 100;
+const ZOOM_HOLD_BEFORE_ALIGN = 1000;
 
-// Custom cubic ease-in-out function for cinematic feel
-const cubicEaseInOut = (t) => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
-const easeOutQuad = (t) => t * (2 - t); // Simpler ease out for quick snaps
+function cubicEaseInOut(t) {
+  return t < 0.5
+    ? 4 * t * t * t
+    : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+function easeOutQuad(t) {
+  return t * (2 - t);
+}
+
+function clamp01(value) {
+  return Math.max(0, Math.min(1, value));
+}
+
+function TypewriterText({
+  text,
+  typingSpeed = 40,
+  showCursor = true,
+  cursorCharacter = "█",
+}) {
+  const [visibleText, setVisibleText] = useState("");
+
+  useEffect(() => {
+    let frame = 0;
+    let cancelled = false;
+
+    function step() {
+      frame += 1;
+      const charCount = Math.min(
+        text.length,
+        Math.floor((frame * 16) / typingSpeed)
+      );
+
+      setVisibleText(text.slice(0, charCount));
+
+      if (!cancelled && charCount < text.length) {
+        timeout = window.setTimeout(step, 16);
+      }
+    }
+
+    let timeout = window.setTimeout(step, 16);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeout);
+    };
+  }, [text, typingSpeed]);
+
+  return (
+    <span>
+      {visibleText}
+      {showCursor ? cursorCharacter : null}
+    </span>
+  );
+}
+
+function AnimatedCamera({
+  stage,
+  zoomStartTime,
+  alignStartTime,
+  globalRef,
+  onRequestAlign,
+  onShowFinalText,
+  onEnterVideo,
+}) {
+  const { camera } = useThree();
+
+  const initialPos = useMemo(() => new THREE.Vector3(15, 5, 30), []);
+  const centerZoomPos = useMemo(() => new THREE.Vector3(-0.5, -0.5, 1.8), []);
+  const finalAlignPos = useMemo(() => new THREE.Vector3(0.5, -0.2, 1.2), []);
+
+  useEffect(() => {
+    if (stage === STAGES.INITIAL) {
+      camera.position.copy(initialPos);
+      camera.rotation.set(0, 0, 0);
+    }
+  }, [camera, initialPos, stage]);
+
+  useFrame(({ clock }, delta) => {
+    const globalGroup = globalRef.current;
+    if (!globalGroup) return;
+    if (stage === STAGES.VIDEO) return;
+
+    const time = clock.getElapsedTime();
+    const nowMs = time * 1000;
+
+    const wobbleX = Math.sin(time * 0.5) * 0.005;
+    const wobbleY = Math.cos(time * 0.6) * 0.005;
+    const rollZ = Math.sin(time * 0.2) * 0.01;
+
+    camera.rotation.z = rollZ;
+
+    if (stage === STAGES.ZOOM_IN) {
+      if (zoomStartTime.current === null) {
+        zoomStartTime.current = nowMs;
+      }
+
+      const elapsed = nowMs - zoomStartTime.current;
+      const progress = clamp01(elapsed / INITIAL_ZOOM_DURATION);
+      const eased = cubicEaseInOut(progress);
+
+      const targetPos = new THREE.Vector3().lerpVectors(
+        initialPos,
+        centerZoomPos,
+        eased
+      );
+
+      targetPos.x += Math.sin(progress * Math.PI) * 2;
+      targetPos.y += Math.cos((progress * Math.PI) / 2) * 1;
+
+      const lerpFactor = 0.04 * delta * 60;
+
+      camera.position.x = THREE.MathUtils.lerp(
+        camera.position.x,
+        targetPos.x + wobbleX,
+        lerpFactor
+      );
+      camera.position.y = THREE.MathUtils.lerp(
+        camera.position.y,
+        targetPos.y + wobbleY,
+        lerpFactor
+      );
+      camera.position.z = THREE.MathUtils.lerp(
+        camera.position.z,
+        targetPos.z,
+        lerpFactor
+      );
+
+      if (progress === 1 && elapsed >= INITIAL_ZOOM_DURATION + ZOOM_HOLD_BEFORE_ALIGN) {
+        onRequestAlign();
+      }
+    }
+
+    if (stage === STAGES.ALIGN_RIGHT) {
+      if (alignStartTime.current === null) {
+        alignStartTime.current = nowMs;
+      }
+
+      const elapsedAlign = nowMs - alignStartTime.current;
+      const alignProgress = clamp01(elapsedAlign / ALIGNMENT_DURATION);
+      const eased = easeOutQuad(alignProgress);
+
+      const camLerpFactor = 0.05 * delta * 60;
+
+      camera.position.x = THREE.MathUtils.lerp(
+        camera.position.x,
+        finalAlignPos.x + wobbleX,
+        camLerpFactor
+      );
+      camera.position.y = THREE.MathUtils.lerp(
+        camera.position.y,
+        finalAlignPos.y + wobbleY,
+        camLerpFactor
+      );
+      camera.position.z = THREE.MathUtils.lerp(
+        camera.position.z,
+        finalAlignPos.z,
+        camLerpFactor
+      );
+
+      globalGroup.position.x = THREE.MathUtils.lerp(
+        globalGroup.position.x,
+        -0.5,
+        eased
+      );
+
+      globalGroup.rotation.y = THREE.MathUtils.lerp(
+        globalGroup.rotation.y,
+        0,
+        eased
+      );
+
+      if (elapsedAlign > FINAL_TEXT_DELAY) {
+        onShowFinalText();
+      }
+
+      if (alignProgress === 1) {
+        const totalElapsed = nowMs - alignStartTime.current;
+        if (totalElapsed >= ALIGNMENT_DURATION + ALIGNMENT_HOLD_TIME) {
+          onEnterVideo();
+        }
+      }
+    }
+
+    const lookAtTarget = new THREE.Vector3(0, 0, 0).lerp(
+      globalGroup.position.clone(),
+      0.05
+    );
+
+    camera.lookAt(lookAtTarget);
+  });
+
+  return null;
+}
+
+function RotatingEarth({ stage, alignStartTime }) {
+  const earthRef = useRef(null);
+
+  useFrame((state, delta) => {
+    if (!earthRef.current) return;
+
+    if (stage !== STAGES.INITIAL && stage !== STAGES.VIDEO) {
+      earthRef.current.rotation.y += 0.004 * delta * 60;
+    }
+
+    if (stage === STAGES.ALIGN_RIGHT && alignStartTime.current !== null) {
+      const elapsedAlign =
+        state.clock.getElapsedTime() * 1000 - alignStartTime.current;
+
+      const alignProgress = clamp01(elapsedAlign / ALIGNMENT_DURATION);
+      const rotationFactor = easeOutQuad(1 - alignProgress) * 0.05 + 0.005;
+
+      earthRef.current.rotation.y += rotationFactor * delta * 60;
+      earthRef.current.rotation.x += rotationFactor * 0.2 * delta * 60;
+    }
+  });
+
+  return (
+    <group ref={earthRef} position={[0, 0, 0]}>
+      <Earth castShadow receiveShadow />
+      <pointLight
+        position={[0, 0, 0]}
+        intensity={10}
+        color="#5882FA"
+        distance={2.5}
+        decay={1}
+      />
+    </group>
+  );
+}
 
 export default function EarthPage({ onComplete }) {
-    // Stage states: initial | zoom-in | align-right | video
-    const [stage, setStage] = useState("initial");
-    const [showTyping, setShowTyping] = useState(false);
-    const [showFinalText, setShowFinalText] = useState(false);
-    const [showVideo, setShowVideo] = useState(false);
+  const [stage, setStage] = useState(STAGES.INITIAL);
+  const [showTyping, setShowTyping] = useState(false);
+  const [showFinalText, setShowFinalText] = useState(false);
+  const [showVideo, setShowVideo] = useState(false);
 
-    // Timeline Refs
-    const zoomStartTime = useRef(null);
-    const alignStartTime = useRef(null);
-    const globalRef = useRef();
-    const canvasRef = useRef();
+  const zoomStartTime = useRef(null);
+  const alignStartTime = useRef(null);
+  const globalRef = useRef(null);
 
-    // Function to trigger the animation start
-    const startSimulation = () => {
-        if (stage === "initial") {
-            setStage("zoom-in");
-            zoomStartTime.current = null; // Reset start time
-        }
-    };
+  const startSimulation = () => {
+    if (stage !== STAGES.INITIAL) return;
 
-    // 1. CINEMATIC CAMERA ANIMATION & TIMELINE LOGIC
-    function AnimatedCamera({ stage }) {
-        const { camera } = useThree();
-        // Camera Key Positions
-        const initialPos = useMemo(() => new THREE.Vector3(15, 5, 30), []);
-        // Midpoint zoom position (center screen)
-        const centerZoomPos = useMemo(() => new THREE.Vector3(-0.5, -0.5, 1.8), []);
-        // Final position for the close-up and align on the right
-        const finalAlignPos = useMemo(() => new THREE.Vector3(0.5, -0.2, 1.2), []);
+    zoomStartTime.current = null;
+    alignStartTime.current = null;
+    setShowTyping(false);
+    setShowFinalText(false);
+    setShowVideo(false);
+    setStage(STAGES.ZOOM_IN);
+  };
 
-        useEffect(() => {
-            if (stage === "initial") camera.position.copy(initialPos);
-        }, [camera, initialPos, stage]);
+  useEffect(() => {
+    if (stage === STAGES.ZOOM_IN) {
+      const typingTimeout = window.setTimeout(
+        () => setShowTyping(true),
+        TYPING_START
+      );
 
-        useFrame(({ clock }, delta) => {
-            const time = clock.getElapsedTime();
-            let lookAtTarget = new THREE.Vector3(0, 0, 0);
+      const hideTypingTimeout = window.setTimeout(() => {
+        setShowTyping(false);
+      }, INITIAL_ZOOM_DURATION * 0.9);
 
-            if (stage === "video") return;
-
-            // Continuous Wobble & Roll (Cinematic Jitter)
-            const wobbleX = Math.sin(time * 0.5) * 0.005;
-            const wobbleY = Math.cos(time * 0.6) * 0.005;
-            const rollZ = Math.sin(time * 0.2) * 0.01;
-            camera.rotation.z = rollZ;
-
-            // --- PHASE 1: ZOOM-IN (CENTER) ---
-            if (stage === "zoom-in") {
-                if (zoomStartTime.current === null) zoomStartTime.current = clock.getElapsedTime() * 1000;
-                
-                const elapsed = clock.getElapsedTime() * 1000 - zoomStartTime.current;
-                let progress = Math.min(1, elapsed / INITIAL_ZOOM_DURATION);
-                const easedProgress = cubicEaseInOut(progress);
-
-                // Calculate the curving path
-                const lerpPos = new THREE.Vector3().lerpVectors(initialPos, centerZoomPos, easedProgress);
-                lerpPos.x += Math.sin(progress * Math.PI) * 2; // X-curve
-                lerpPos.y += Math.cos(progress * Math.PI / 2) * 1; // Y-curve
-
-                // Apply positional wobble and lerp
-                const lerpFactor = 0.04 * delta * 60;
-                camera.position.x = THREE.MathUtils.lerp(camera.position.x, lerpPos.x + wobbleX, lerpFactor);
-                camera.position.y = THREE.MathUtils.lerp(camera.position.y, lerpPos.y + wobbleY, lerpFactor);
-                camera.position.z = THREE.MathUtils.lerp(camera.position.z, lerpPos.z, lerpFactor);
-                
-                if (progress === 1) {
-                    // Show final text after a short hold, then initiate alignment
-                    const holdTime = 1000;
-                    if (elapsed >= INITIAL_ZOOM_DURATION + holdTime) {
-                         setStage("align-right");
-                    }
-                }
-
-            // --- PHASE 2: ALIGN-RIGHT (FINAL POSITION) ---
-            } else if (stage === "align-right") {
-                if (alignStartTime.current === null) alignStartTime.current = clock.getElapsedTime() * 1000;
-
-                const elapsedAlign = clock.getElapsedTime() * 1000 - alignStartTime.current;
-                const alignProgress = Math.min(1, elapsedAlign / ALIGNMENT_DURATION);
-
-                // Use a high ease-out for a controlled snap/deceleration
-                const easeInSharp = easeOutQuad(alignProgress);
-
-                // Camera moves to its final aligned position
-                const camLerpFactor = 0.05 * delta * 60;
-                camera.position.x = THREE.MathUtils.lerp(camera.position.x, finalAlignPos.x + wobbleX, camLerpFactor);
-                camera.position.y = THREE.MathUtils.lerp(camera.position.y, finalAlignPos.y + wobbleY, camLerpFactor);
-                camera.position.z = THREE.MathUtils.lerp(camera.position.z, finalAlignPos.z, camLerpFactor);
-
-                // Global group (Earth) snaps left to position it on the screen's right side
-                const finalGlobalShift = -0.5;
-                globalRef.current.position.x = THREE.MathUtils.lerp(globalRef.current.position.x, finalGlobalShift, easeInSharp);
-                
-                // Rotation snaps back to straight-on view
-                globalRef.current.rotation.y = THREE.MathUtils.lerp(globalRef.current.rotation.y, 0, easeInSharp);
-                
-                // Show final text immediately upon starting alignment phase
-                if (elapsedAlign > 100) setShowFinalText(true);
-
-                // Check for final hold time
-                if (alignProgress === 1) {
-                    const totalElapsed = clock.getElapsedTime() * 1000 - alignStartTime.current;
-                    if (totalElapsed >= ALIGNMENT_DURATION + ALIGNMENT_HOLD_TIME) {
-                        setStage("video"); // Trigger video after text hold
-                    }
-                }
-            }
-            
-            // LookAt must track the center of the global group (now shifted)
-            camera.lookAt(lookAtTarget.lerp(globalRef.current.position.clone(), 0.05));
-        });
-
-        return null;
+      return () => {
+        window.clearTimeout(typingTimeout);
+        window.clearTimeout(hideTypingTimeout);
+      };
     }
 
-    // 2. EARTH ROTATION & GLOBAL SCENE GROUP
-    function RotatingEarth({ stage }) {
-        const earthRef = useRef();
-        const initialRotationSpeed = 0.004;
-
-        useFrame((state, delta) => {
-            if (!earthRef.current) return;
-            
-            // Continuous rotation
-            if (stage !== "initial" && stage !== "video") {
-                earthRef.current.rotation.y += initialRotationSpeed * delta * 60;
-            }
-            
-            // Increased rotation during the dramatic camera movement
-            if (stage === "align-right" && alignStartTime.current) {
-                const elapsedAlign = state.clock.getElapsedTime() * 1000 - alignStartTime.current;
-                const alignProgress = Math.min(1, elapsedAlign / ALIGNMENT_DURATION);
-                // Spin up quickly at the start of alignment
-                const rotationFactor = easeOutQuad(1 - alignProgress) * 0.05 + 0.005; 
-                
-                earthRef.current.rotation.y += rotationFactor * delta * 60;
-                earthRef.current.rotation.x += rotationFactor * 0.2 * delta * 60; // Tilt slightly
-            }
-        });
-
-        return (
-            <group ref={earthRef} position={[0, 0, 0]} scale={[1, 1, 1]}>
-                <Earth castShadow receiveShadow />
-                {/* ATMOSPHERIC GLOW */}
-                <pointLight
-                    position={[0, 0, 0]}
-                    intensity={10}
-                    color="#5882FA"
-                    distance={2.5}
-                    decay={1}
-                />
-            </group>
-        );
+    if (stage === STAGES.ALIGN_RIGHT) {
+      setShowTyping(false);
     }
 
-    // 3. TIMELINE MANAGEMENT
-    useEffect(() => {
-        if (stage === "zoom-in") {
-            // Show typing text 1.5s after zoom starts
-            const typingTimeout = setTimeout(() => setShowTyping(true), TYPING_START);
-            
-            // Hide typing text just before the alignment phase
-            const hideTypingTimeout = setTimeout(() => {
-                setShowTyping(false);
-            }, INITIAL_ZOOM_DURATION * 0.9);
+    if (stage === STAGES.VIDEO) {
+      setShowTyping(false);
+      setShowFinalText(false);
+      setShowVideo(true);
+    }
+  }, [stage]);
 
-            return () => {
-                clearTimeout(typingTimeout);
-                clearTimeout(hideTypingTimeout);
-            };
-        } else if (stage === "align-right") {
-             // The logic to transition to 'video' is now in AnimatedCamera to be frame-accurate.
-             // We just need to ensure alignment start time is reset.
-             alignStartTime.current = null;
-        } else if (stage === "video") {
-            setShowFinalText(false);
-            setShowVideo(true);
-        }
-    }, [stage]);
+  const handleVideoEnd = () => {
+    if (typeof onComplete === "function") {
+      onComplete();
+    }
+  };
 
-    // Function to handle video end and call onComplete
-    const handleVideoEnd = () => {
-        if (onComplete) {
-            onComplete();
-        }
-    };
+  return (
+    <div className="earth-page">
+      <Canvas
+        camera={{ position: [15, 5, 30], fov: 50 }}
+        className="earth-page__canvas"
+        style={{ visibility: stage === STAGES.VIDEO ? "hidden" : "visible" }}
+        shadows
+      >
+        <color attach="background" args={["#01010A"]} />
 
+        <AnimatedCamera
+          stage={stage}
+          zoomStartTime={zoomStartTime}
+          alignStartTime={alignStartTime}
+          globalRef={globalRef}
+          onRequestAlign={() => setStage(STAGES.ALIGN_RIGHT)}
+          onShowFinalText={() => setShowFinalText(true)}
+          onEnterVideo={() => setStage(STAGES.VIDEO)}
+        />
 
-    return (
-        <div style={{ width: "100vw", height: "100vh", position: "relative" }}>
-            
-            {/* 1. CANVAS: Renders the 3D scene */}
-            <Canvas
-                ref={canvasRef}
-                camera={{ position: [15, 5, 30], fov: 50 }}
-                style={{ visibility: stage === "video" ? 'hidden' : 'visible' }}
-                shadows // Ensure shadows are enabled
-            >
-                <color attach="background" args={['#01010A']} />
-                
-                <AnimatedCamera stage={stage} />
-                
-                <group ref={globalRef}>
-                    
-                    <ambientLight intensity={0.05} />
-                    {/* Sun/Primary light source */}
-                    <directionalLight
-                        position={[20, 10, 15]}
-                        intensity={2.5}
-                        color="#FFFFFF"
-                        castShadow
-                        // Shadow properties for realistic Earth shadow
-                        shadow-mapSize-width={2048}
-                        shadow-mapSize-height={2048}
-                        shadow-camera-near={0.5} 
-                        shadow-camera-far={50}
-                        shadow-camera-left={-10}
-                        shadow-camera-right={10}
-                        shadow-camera-top={10}
-                        shadow-camera-bottom={-10}
-                    />
-                    
-                    <OrbitControls enableZoom={false} enableRotate={false} />
-                    
-                    <Suspense fallback={null}>
-                        <MilkyWay />
-                        <RotatingEarth stage={stage} />
-                    </Suspense>
+        <group ref={globalRef}>
+          <ambientLight intensity={0.05} />
 
-                </group>
+          <directionalLight
+            position={[20, 10, 15]}
+            intensity={2.5}
+            color="#FFFFFF"
+            castShadow
+            shadow-mapSize-width={2048}
+            shadow-mapSize-height={2048}
+            shadow-camera-near={0.5}
+            shadow-camera-far={50}
+            shadow-camera-left={-10}
+            shadow-camera-right={10}
+            shadow-camera-top={10}
+            shadow-camera-bottom={-10}
+          />
 
-                {/* Cinematic Post-Processing */}
-                <EffectComposer disableNormalPass>
-                    <Bloom
-                        luminanceThreshold={0.5}
-                        luminanceSmoothing={0.05}
-                        intensity={1.2}
-                    />
-                    <Vignette
-                        offset={0.3}
-                        darkness={0.8}
-                    />
-                </EffectComposer>
-            </Canvas>
+          <OrbitControls enableZoom={false} enableRotate={false} />
 
+          <Suspense fallback={null}>
+            <Milkyway />
+            <RotatingEarth stage={stage} alignStartTime={alignStartTime} />
+            <Environment preset="night" />
+          </Suspense>
+        </group>
 
-            {/* 2. START BUTTON OVERLAY */}
-            {stage === "initial" && (
-                <div
-                    style={{
-                        position: "absolute",
-                        top: 0,
-                        left: 0,
-                        width: "100%",
-                        height: "100%",
-                        display: "flex",
-                        justifyContent: "center",
-                        alignItems: "center",
-                        zIndex: 10,
-                        backgroundColor: 'rgba(0, 0, 0, 0.4)'
-                    }}
-                >
-                    <ExploreButton
-                        onClick={startSimulation}
-                        children="INITIATE INGRESS"
-                    />
-                </div>
-            )}
+        <EffectComposer disableNormalPass>
+          <Bloom
+            luminanceThreshold={0.5}
+            luminanceSmoothing={0.05}
+            intensity={1.2}
+          />
+          <Vignette offset={0.3} darkness={0.8} />
+        </EffectComposer>
+      </Canvas>
 
-            {/* 3. TEXT OVERLAYS */}
-            {(stage !== "video") && (
-                <>
-                    {/* Typing Text during initial zoom-in */}
-                    {showTyping && stage === "zoom-in" && (
-                        <div
-                            style={{
-                                position: "absolute",
-                                top: "10%",
-                                left: "50%",
-                                transform: "translateX(-50%)",
-                                fontFamily: "'Orbitron', sans-serif",
-                                color: "#00FFFF",
-                                fontSize: "32px",
-                                fontWeight: 600,
-                                zIndex: 10,
-                                pointerEvents: "none",
-                                textShadow: "0 0 15px rgba(0, 255, 255, 0.8)",
-                                padding: "5px 15px",
-                                border: "1px solid #00FFFF",
-                                backgroundColor: "rgba(0, 20, 20, 0.1)",
-                            }}
-                        >
-                            <TextType
-                                text={["ORBITAL INGRESS COMMENCING..."]}
-                                typingSpeed={40}
-                                pauseDuration={1000}
-                                showCursor
-                                cursorCharacter="█"
-                            />
-                        </div>
-                    )}
-
-                    {/* Final Alignment Text (Narrative) */}
-                    {showFinalText && (stage === "align-right" || stage === "zoom-in") && (
-                        <div
-                            style={{
-                                position: "absolute",
-                                bottom: "8%",
-                                left: "50%",
-                                transform: "translateX(-50%)",
-                                width: "80%",
-                                maxWidth: "700px",
-                                textAlign: "left",
-                                
-                                fontFamily: "'Poppins', sans-serif",
-                                color: "#FFFFFF",
-                                fontSize: "18px",
-                                lineHeight: "1.6",
-                                fontWeight: 300,
-
-                                // Container Styling
-                                zIndex: 10,
-                                background: "rgba(10, 20, 40, 0.7)",
-                                borderLeft: "5px solid #00FF00",
-                                borderTop: "1px solid rgba(255, 255, 255, 0.2)",
-                                padding: "20px 30px",
-                                borderRadius: "0 8px 8px 0",
-                                boxShadow: "0 0 10px rgba(0, 255, 0, 0.2)",
-                                // Fade in the text smoothly
-                                opacity: stage === "align-right" ? 1 : 0, 
-                                transition: 'opacity 1s ease-in',
-                            }}
-                        >
-                            <p style={{ margin: 0, padding: 0 }}>
-                                <strong style={{ color: "#00FF00" }}>TARGET ACQUIRED:</strong> Terra Nova (Earth). Magnetic Field integrity nominal. Atmosphere stabilized.
-                                <br /><br />
-                                Mission parameters dictate immediate departure. Magnetic shields engaged. The ship must reach warp velocity before solar radiation impact.
-                                <br />
-                                <strong style={{ color: "#FF9900" }}>INITIATE HYPERDRIVE SEQUENCE. Prepare for jump.</strong>
-                            </p>
-                        </div>
-                    )}
-                </>
-            )}
-
-            {/* 4. FULL-SCREEN VIDEO CONTAINER */}
-            {showVideo && (
-                <div
-                    style={{
-                        position: "absolute",
-                        top: 0,
-                        left: 0,
-                        width: "100%",
-                        height: "100%",
-                        zIndex: 20,
-                        backgroundColor: "black",
-                    }}
-                >
-                    <video
-                        src="/videos/satellite.mp4"
-                        autoPlay
-                        playsInline
-                        muted={true}
-                        onEnded={handleVideoEnd}
-                        style={{
-                            width: "100%",
-                            height: "100%",
-                            objectFit: "cover",
-                        }}
-                    >
-                        Your browser does not support the video tag.
-                    </video>
-                </div>
-            )}
+      {stage === STAGES.INITIAL ? (
+        <div className="earth-page__start-overlay">
+          <button
+            type="button"
+            className="earth-page__start-button"
+            onClick={startSimulation}
+          >
+            INITIATE INGRESS
+          </button>
         </div>
-    );
+      ) : null}
+
+      {stage !== STAGES.VIDEO ? (
+        <>
+          {showTyping && stage === STAGES.ZOOM_IN ? (
+            <div className="earth-page__typing-overlay">
+              <TypewriterText
+                text="ORBITAL INGRESS COMMENCING..."
+                typingSpeed={40}
+                showCursor
+                cursorCharacter="█"
+              />
+            </div>
+          ) : null}
+
+          {showFinalText &&
+          (stage === STAGES.ALIGN_RIGHT || stage === STAGES.ZOOM_IN) ? (
+            <div className="earth-page__final-overlay">
+              <p>
+                <strong>TARGET ACQUIRED:</strong> Terra Nova (Earth). Magnetic
+                Field integrity nominal. Atmosphere stabilized.
+                <br />
+                <br />
+                Mission parameters dictate immediate departure. Magnetic shields
+                engaged. The ship must reach warp velocity before solar
+                radiation impact.
+                <br />
+                <strong>
+                  INITIATE HYPERDRIVE SEQUENCE. Prepare for jump.
+                </strong>
+              </p>
+            </div>
+          ) : null}
+        </>
+      ) : null}
+
+      {showVideo ? (
+        <div className="earth-page__video-layer">
+          <video
+            src="/videos/satellite.mp4"
+            autoPlay
+            playsInline
+            muted
+            onEnded={handleVideoEnd}
+            className="earth-page__video"
+          >
+            Your browser does not support the video tag.
+          </video>
+        </div>
+      ) : null}
+    </div>
+  );
 }
