@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { Canvas, useFrame, useThree } from "@react-three/fiber";
+import { useFrame, useThree } from "@react-three/fiber";
 import { useGLTF } from "@react-three/drei";
 import { useSpring } from "@react-spring/three";
 import * as THREE from "three";
@@ -17,7 +17,7 @@ const EXIT_CAMERA_POSITION = [0, -0.01, -0.15];
 const EXIT_LOOK_AT = [0, -0.02, -1.5];
 const EXIT_DURATION = 2000;
 
-function CockpitModel({ wobble = false }) {
+export function CockpitModel({ wobble = false, ...props }) {
   const { scene } = useGLTF(COCKPIT_MODEL_PATH);
   const ref = useRef(null);
 
@@ -29,13 +29,15 @@ function CockpitModel({ wobble = false }) {
     ref.current.rotation.y = Math.sin(time * 25) * 0.005;
   });
 
-  return <primitive ref={ref} object={scene} scale={0.5} />;
+  return <primitive ref={ref} object={scene} scale={0.5} {...props} />;
 }
 
-function CockpitCamera({
+export function CockpitCameraRig({
   zoomOut = false,
   onAnimationComplete,
   onZoomOutComplete,
+  shake = false,
+  shakeIntensity = 1,
 }) {
   const { camera } = useThree();
 
@@ -73,16 +75,36 @@ function CockpitCamera({
     });
   }, [zoomOut, api, onZoomOutComplete]);
 
-  useFrame(() => {
+  useFrame(({ clock }) => {
     const currentPosition = spring.camPos.get();
     const currentLookAt = spring.lookAt.get();
 
     if (!currentPosition || !currentLookAt) return;
 
+    let shakeX = 0;
+    let shakeY = 0;
+    let shakeZ = 0;
+
+    if (shake) {
+      const t = clock.getElapsedTime();
+      const base = 0.0025 * shakeIntensity;
+
+      shakeX =
+        Math.sin(t * 38) * base +
+        (Math.random() - 0.5) * base * 0.65;
+
+      shakeY =
+        Math.cos(t * 42) * base +
+        (Math.random() - 0.5) * base * 0.65;
+
+      shakeZ =
+        Math.sin(t * 28) * base * 0.35;
+    }
+
     camera.position.set(
-      currentPosition[0],
-      currentPosition[1],
-      currentPosition[2]
+      currentPosition[0] + shakeX,
+      currentPosition[1] + shakeY,
+      currentPosition[2] + shakeZ
     );
 
     camera.lookAt(
@@ -97,33 +119,8 @@ function CockpitCamera({
   return null;
 }
 
-export default function Cockpit({
-  wobble = false,
-  zoomOut = false,
-  onAnimationComplete,
-  onZoomOutComplete,
-}) {
-  return (
-    <Canvas
-      camera={{ fov: 60, near: 0.1, far: 1000 }}
-      gl={{ alpha: true }}
-      style={{
-        position: "absolute",
-        inset: 0,
-        pointerEvents: "none",
-      }}
-    >
-      <ambientLight intensity={0.6} />
-      <directionalLight position={[5, 5, 5]} intensity={1} />
-
-      <CockpitModel wobble={wobble} />
-      <CockpitCamera
-        zoomOut={zoomOut}
-        onAnimationComplete={onAnimationComplete}
-        onZoomOutComplete={onZoomOutComplete}
-      />
-    </Canvas>
-  );
+export default function Cockpit(props) {
+  return <CockpitModel {...props} />;
 }
 
 useGLTF.preload(COCKPIT_MODEL_PATH);

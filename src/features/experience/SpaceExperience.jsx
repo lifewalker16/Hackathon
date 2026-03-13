@@ -1,85 +1,42 @@
+import SceneDirector from "../../cinematic/director/SceneDirector";
+import useSequenceDirector from "../../cinematic/director/useSequenceDirector";
+import useTransitionDirector, {
+  TRANSITIONS,
+} from "../../cinematic/director/useTransitionDirector";
+import TransitionOverlay from "../../cinematic/overlays/TransitionOverlay";
+
 import { useEffect } from "react";
-import Cockpit from "../../components/scene/shared/Cockpit";
-import Sun from "../../components/scene/shared/Sun";
-import SolarFlarePosition from "../../components/SolarFlarePosition";
-import EarthPage from "../../components/EarthPage";
-import useExperienceSequence from "./hooks/useExperienceSequence";
-import { EXPERIENCE_STAGES } from "./lib/experienceStages";
-import ExperienceOverlay from "./components/ExperienceOverlay";
-import CountdownOverlay from "./components/CountdownOverlay";
 
 export default function SpaceExperience() {
-  const { stage, countdownValue, controls } = useExperienceSequence();
+  const { scene, nextScene } = useSequenceDirector();
+  const { transition, triggerTransition } = useTransitionDirector();
 
   useEffect(() => {
-    return () => {
-      controls.clearAllTimers();
-    };
-  }, [controls]);
+    switch (scene) {
+      case "warp":
+        triggerTransition(TRANSITIONS.FLASH);
+        break;
 
-  useEffect(() => {
-    if (stage === EXPERIENCE_STAGES.COCKPIT_LAUNCH) {
-      const timer = window.setTimeout(() => {
-        controls.moveToSunEntry();
-      }, 2600);
+      case "solar-approach":
+        triggerTransition(TRANSITIONS.BLOOM);
+        break;
 
-      return () => window.clearTimeout(timer);
+      case "earth-reveal":
+        triggerTransition(TRANSITIONS.FADE);
+        break;
+
+      default:
+        break;
     }
-
-    if (stage === EXPERIENCE_STAGES.SUN_ENTRY) {
-      const timer = window.setTimeout(() => {
-        controls.moveToSolarFlare();
-      }, 5000);
-
-      return () => window.clearTimeout(timer);
-    }
-
-    if (stage === EXPERIENCE_STAGES.SOLAR_FLARE) {
-      const timer = window.setTimeout(() => {
-        controls.moveToEarthEntry();
-      }, 7000);
-
-      return () => window.clearTimeout(timer);
-    }
-
-    return undefined;
-  }, [stage, controls]);
+  }, [scene, triggerTransition]);
 
   return (
-    <div className="space-experience">
-      <ExperienceOverlay
-        stage={stage}
-        onLaunch={controls.startCountdown}
-      />
+    <div className="cinematic-root">
 
-      <CountdownOverlay value={countdownValue} />
+      <SceneDirector scene={scene} nextScene={nextScene} />
 
-      <div className="space-experience__scene">
-        {(stage === EXPERIENCE_STAGES.COCKPIT_INTRO ||
-          stage === EXPERIENCE_STAGES.COCKPIT_READY ||
-          stage === EXPERIENCE_STAGES.COUNTDOWN ||
-          stage === EXPERIENCE_STAGES.COCKPIT_LAUNCH) && (
-          <Cockpit
-            wobble={
-              stage === EXPERIENCE_STAGES.COCKPIT_INTRO ||
-              stage === EXPERIENCE_STAGES.COCKPIT_READY
-            }
-            zoomOut={stage === EXPERIENCE_STAGES.COCKPIT_LAUNCH}
-            onAnimationComplete={controls.beginCockpitReady}
-            onZoomOutComplete={controls.moveToSunEntry}
-          />
-        )}
+      <TransitionOverlay transition={transition} />
 
-        {stage === EXPERIENCE_STAGES.SUN_ENTRY && (
-          <Sun onZoomFinished={controls.moveToSolarFlare} />
-        )}
-
-        {stage === EXPERIENCE_STAGES.SOLAR_FLARE && <SolarFlarePosition />}
-
-        {stage === EXPERIENCE_STAGES.EARTH_ENTRY && (
-          <EarthPage onComplete={controls.completeExperience} />
-        )}
-      </div>
     </div>
   );
 }
